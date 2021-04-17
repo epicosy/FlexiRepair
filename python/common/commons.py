@@ -171,9 +171,10 @@ def getRun():
     parser = argparse.ArgumentParser(description='')
     # parser.add_argument('-subject', dest='subject', help='Environment')
     parser.add_argument('-root', dest='root', help='root folder')
-    parser.add_argument('-job',dest='job',help='job name')
-    parser.add_argument('-prop',dest='prop',help='property file')
-
+    parser.add_argument('-job', dest='job', help='job name')
+    parser.add_argument('-prop', dest='prop', help='property file')
+    parser.add_argument('--manifest_path', dest='manifest_path', type=str, help='Path for the manifest file',
+                        required=False)
 
     args = parser.parse_args()
 
@@ -182,6 +183,22 @@ def getRun():
         raise AttributeError
     return args
 
+
+def get_manifest(manifest_path: Path):
+    import json
+
+    with manifest_path.open(mode='r') as mp:
+        return json.load(mp)
+
+
+def get_prioritization():
+    prioritization = os.environ["PRIORITIZION"]
+    p_types = {'project': 'uProject', 'patch': 'uPatch', 'file': 'uFilenames', 'function': 'uFunction', 'hunk': 'uFreq'}
+
+    if prioritization not in p_types:
+        raise Exception("Unknown prioritization " + prioritization)
+
+    return p_types[prioritization]
 
 
 def shellCallTemplate4jar(cmd,enc='utf-8'):

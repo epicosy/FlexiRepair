@@ -1,5 +1,5 @@
 from common.commons import *
-
+from repair import Tester
 
 
 
@@ -104,6 +104,16 @@ if __name__ == '__main__':
             from test_patched_file import checkCorrect
             checkCorrect()
 
+        elif job == 'repair':
+            from repair import ProgramRepair, PatchGenerator, Validator
+
+            manifest = get_manifest(args.manifest_path)
+            generator = PatchGenerator(working_dir=manifest['working_dir'], source_file=manifest['source_file'])
+            validator = Validator(test_script=manifest['test_script'], compile_script=manifest['compile_script'],
+                                  tests=manifest['tests'])
+            program_repair = ProgramRepair(generator=generator, validator=validator)
+
+            program_repair()
 
         elif job == 'introclass':
             from getIntroClass import export
