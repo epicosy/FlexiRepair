@@ -1,7 +1,4 @@
 from common.commons import *
-from repair import Tester
-
-
 
 
 if __name__ == '__main__':

@@ -10,6 +10,7 @@ DATA_PATH = Path(os.environ["DATA_PATH"])
 SPINFER_PATH = os.environ["spinfer"]
 DATASET = Path(os.environ["dataset"])
 COCCI_PATH = Path(os.environ["coccinelle"]) / 'spatch'
+# TODO: FIX this prioritization not working
 PRIORITIZATION = get_prioritization()
 
 
@@ -154,12 +155,12 @@ class CocciPatches:
 
 
 class PatchGenerator:
-    def __init__(self, working_dir: Path, source_file: Path):
-        self.working_dir = working_dir
-        self.source_file = source_file
-        self.backup_source = working_dir / ('backup_' + self.source_file.name)
-        self.cocci_patches = CocciPatches(src_file=source_file, patterns_dir=working_dir / 'patterns',
-                                          patches_dir=working_dir / 'patches')
+    def __init__(self, working_dir: str, source_file: str):
+        self.working_dir = Path(working_dir)
+        self.source_file = Path(source_file)
+        self.backup_source = self.working_dir / ('backup_' + self.source_file.name)
+        self.cocci_patches = CocciPatches(src_file=self.source_file, patterns_dir=self.working_dir / 'patterns',
+                                          patches_dir=self.working_dir / 'patches')
 
     def __call__(self):
         return self.cocci_patches()
@@ -191,6 +192,8 @@ class ProgramRepair:
         self.generator.backup()
 
         for patch in self.generator():
+            if patch is None:
+                continue
             self.generator.apply(patch)
 
             if self.validator(patch):
