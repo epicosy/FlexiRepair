@@ -184,8 +184,9 @@ def getRun():
     return args
 
 
-def get_manifest(manifest_path: Path):
+def get_manifest(manifest_path: str):
     import json
+    manifest_path = Path(manifest_path)
 
     with manifest_path.open(mode='r') as mp:
         return json.load(mp)
@@ -468,11 +469,15 @@ def parallelRun(coreFun,elements,*args,max_workers=os.cpu_count()):
             raise
 
 
-def parallelRunMerge(coreFun,elements,*args,max_workers=os.cpu_count()):
+def parallelRunMerge(elements, *args, coreFun=None, max_workers=os.cpu_count()):
     dataL = []
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
         try:
-            futures = {executor.submit(coreFun, l,*args): l for l in elements}
+            if coreFun:
+                futures = {executor.submit(coreFun, el, *args): el for el in elements}
+            else:
+                futures = {executor.submit(el, *args): el for el in elements}
+
             kwargs = {
                 'total': len(futures),
                 'unit': 'files',

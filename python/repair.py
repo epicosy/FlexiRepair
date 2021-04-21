@@ -1,16 +1,18 @@
 import shutil
 import os
-import numpy as np
+import logging
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, AnyStr
-from common.commons import shellGitCheckout, get_prioritization, load_zipped_pickle
+from common.commons import shellGitCheckout, get_prioritization, load_zipped_pickle, parallelRunMerge
 
+ROOT_PATH = Path(os.environ["ROOT_DIR"])
 DATA_PATH = Path(os.environ["DATA_PATH"])
 SPINFER_PATH = os.environ["spinfer"]
 DATASET = Path(os.environ["dataset"])
+ALL_DATASET = ROOT_PATH / 'data' / 'allCocciPatterns.pickle'
 COCCI_PATH = Path(os.environ["coccinelle"]) / 'spatch'
-# TODO: FIX this prioritization not working
 PRIORITIZATION = get_prioritization()
 
 
@@ -27,15 +29,15 @@ class Validator:
         self.outcomes = {t: -1 for t in self.tests}
 
         output, e = shellGitCheckout(self.compile_script)
-
-        if output != 0 or e is not None:
+        print(output)
+        if e or not output:
             print(f"\nCompilation failed for patch {patch.name}")
             return False
 
         print(f"\nPatch {patch.name} passed compilation")
 
         for test_name, outcome, e in iter(self.__iter__()):
-            if outcome != 0 or e is not None:
+            if e or not outcome:
                 print(f"\nTest {test_name} failed with return code {outcome} " + (str(e) if e else ''))
             else:
                 print(f"\nTest {test_name} passed")
@@ -55,11 +57,12 @@ class Validator:
 
         test_name = self.tests[self.cur]
         output, e = shellGitCheckout(self.script.replace("TEST_NAME", test_name))
-        self.outcomes[test_name] = int(output)
-
-        if int(output) == 0:
+        print(output)
+        if e or not output:
+            self.outcomes[test_name] = 1
             self.passed += 1
         else:
+            self.outcomes[test_name] = 0
             self.failed += 1
 
         self.cur += 1
@@ -73,74 +76,88 @@ class Validator:
         return False
 
 
+@dataclass
+class CocciExecutor:
+    target: Path
+    sp_file: Path
+    pattern: str
+    patch: Path
+    spatch_file: Path
+
+    def __call__(self, *args, **kwargs):
+        if self.run_spatch():
+            if self.run_gnu_patch():
+                return self.patch
+        return None
+
+    def run_spatch(self):
+        # check if cocci file exists, otherwise create tmp file with the pattern
+        if not self.sp_file.exists():
+            with self.sp_file.open(mode='w') as cf:
+                cf.write(self.pattern)
+
+        spatch_cmd = f"{COCCI_PATH} --sp-file {self.spatch_file} {self.target} --patch {self.spatch_file}"
+        #spatch_cmd += f" > {self.spatch_file}"
+        output, e = shellGitCheckout(spatch_cmd)
+
+        if e is not None:
+            logging.warning(e)
+            return None
+
+        if not self.spatch_file.exists() or self.spatch_file.stat().st_size == 0:
+            self.spatch_file.unlink()
+            return None
+
+        return output
+
+    def run_gnu_patch(self):
+        output, e = shellGitCheckout(f"patch {self.target} {self.spatch_file} -o {self.patch}")
+
+        if e is not None:
+            logging.warning(e)
+            return None
+
+        return output
+
+
 class CocciPatches:
     def __init__(self, src_file: Path, patterns_dir: Path, patches_dir: Path):
         self.src_file = src_file
         self.patterns_dir = patterns_dir
         self.patches_dir = patches_dir
-        self.patterns = []
+        self.patterns = {}
         self.patches = []
+        self.data_path = None
 
     def __call__(self):
         if self.patches:
             return self.patches
 
         self.init_dirs()
-        self.load()
+        self.load_all()
 
-        return iter(self.__iter__())
+        cmd_list = [CocciExecutor(target=self.src_file, pattern=pattern,
+                                  sp_file=self.data_path / Path(file),
+                                  spatch_file=self.patterns_dir / (self.src_file.stem + pattern.stem + '.txt'),
+                                  patch=self.patches_dir / (self.src_file.stem + pattern.stem + '.c')) for file, pattern
+                    in self.patterns.items()]
 
-    def __iter__(self):
-        self.cur = 0
-        return self
+        patches = parallelRunMerge(cmd_list)
+        self.patches = list(filter(None, patches))
 
-    def __next__(self):
-        if self.cur + 1 == len(self.patterns):
-            raise StopIteration
-        patch = None
-
-        while patch is None:
-            patch = self.create_patch()
-
-            if self.cur + 1 == len(self.patterns):
-                break
-
-            self.cur += 1
-
-        return patch
-
-    def create_patch(self):
-        patch_name = self.patterns_dir / self.src_file.name
-        pattern = self.patterns[self.cur]
-        # TODO: FIX the parallel problem
-        patch_file = self.patterns_dir / (self.src_file.stem + pattern.stem + '.txt')
-        patched = self.patches_dir / (self.src_file.stem + pattern.stem + '.c')
-        sp_file = DATASET / 'cocci' / pattern.name
-
-        cocci_cmd = f"{COCCI_PATH} --sp-file {sp_file} {self.src_file} --patch -o {patch_name} > {patch_file}"
-        patch_cmd = f"patch -d {self.src_file} -i {patch_file} -o {patched}"
-        output, e = shellGitCheckout(cocci_cmd)
-
-        if e is not e:
-            return None
-
-        if patch_file.stat().st_size == 0:
-            patch_file.unlink()
-            return None
-
-        output, e = shellGitCheckout(patch_cmd)
-
-        if e is not None:
-            return None
-        self.patches.append(patched)
-        return patched
+        return self.patches
 
     def load(self):
         sp_files = load_zipped_pickle(DATA_PATH / 'uPatterns.pickle')
         sp_files.sort_values(by=PRIORITIZATION, inplace=True, ascending=False)
         sp_files = sp_files.loc[sp_files['uid'] != '.DS_Store']
+        self.patterns = {row.uid: row.pattern for row_id, row in sp_files.iterrows()}
+        self.data_path = DATASET / 'cocci'
 
-        self.patterns = sp_files[['uid']].values.tolist()
+    def load_all(self):
+        sp_files = load_zipped_pickle(DATA_PATH / 'allCocciPatterns.pickle')
+        self.patterns = {row.cid: row.pattern for row_id, row in sp_files.iterrows()}
+        self.data_path = Path('/tmp')
 
     def init_dirs(self):
         if self.patterns_dir.exists():
