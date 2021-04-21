@@ -96,8 +96,8 @@ class CocciExecutor:
             with self.sp_file.open(mode='w') as cf:
                 cf.write(self.pattern)
 
-        spatch_cmd = f"{COCCI_PATH} --sp-file {self.spatch_file} {self.target} --patch {self.spatch_file}"
-        #spatch_cmd += f" > {self.spatch_file}"
+        spatch_cmd = f"{COCCI_PATH} --sp-file {self.sp_file} {self.target} --patch {self.spatch_file}"
+        # spatch_cmd += f" > {self.spatch_file}"
         output, e = shellGitCheckout(spatch_cmd)
 
         if e is not None:
@@ -138,8 +138,8 @@ class CocciPatches:
 
         cmd_list = [CocciExecutor(target=self.src_file, pattern=pattern,
                                   sp_file=self.data_path / Path(file),
-                                  spatch_file=self.patterns_dir / (self.src_file.stem + pattern.stem + '.txt'),
-                                  patch=self.patches_dir / (self.src_file.stem + pattern.stem + '.c')) for file, pattern
+                                  spatch_file=self.patterns_dir / (self.src_file.stem + file.split('.')[0] + '.txt'),
+                                  patch=self.patches_dir / (self.src_file.stem + file.split('.')[0] + '.c')) for file, pattern
                     in self.patterns.items()]
 
         patches = parallelRunMerge(cmd_list)
