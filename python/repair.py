@@ -51,7 +51,7 @@ class Validator:
         return self
 
     def __next__(self):
-        if self.cur + 1 == self.total:
+        if self.cur == self.total:
             raise StopIteration
 
         test_name = self.tests[self.cur]
@@ -227,14 +227,17 @@ class ProgramRepair:
         self.generator = generator
         self.validator = validator
         self.repair_dir = generator.working_dir / 'repair'
+        self.limit = 5
 
     def __call__(self, *args, **kwargs):
         self.generator.backup()
         success_rate_patches = {}
 
-        for patch in self.generator():
+        for idx, patch in enumerate(self.generator()):
             if patch is None:
                 continue
+            if idx + 1 == self.limit:
+                break
             self.generator.apply(patch)
             patch_passes = self.validator(patch)
             success_rate_patches[patch.name] = (self.validator.success_rate(), self.validator.outcomes)
@@ -245,7 +248,11 @@ class ProgramRepair:
                 break
 
         if success_rate_patches:
-            print(success_rate_patches)
+            print("Repair Summary")
+            for patch, outcomes in success_rate_patches.items():
+                print(patch, outcomes[0])
+                for tn, v in outcomes[1].items():
+                    print(f"\t{tn} {v}")
 
         self.generator.restore()
 
