@@ -26,8 +26,8 @@ miner:
 
     #TUNING PARAMETERS LISTED BELOW
 
-    hunkLimit : 3       # maximum number of hunks
-    patchSize : 50      # maximum number of -\+ lines in a patch
+    hunkLimit : 5       # maximum number of hunks
+    patchSize : 100      # maximum number of -\+ lines in a patch
     patchType : ALL     # the type of the patches from repositories. ALL considers all patches whereas BUG considers patches with commit logs containing "bug" or "fix" keywords
 
     validList : ALL     # the list of the bugs to be validated permitted values ALL, or comma seperated  bugname located in codeflaws  (e.g. 330-B-bug-16561986-16561997,325-A-bug-4061814-4061951)
@@ -35,5 +35,5 @@ miner:
     prioritizion : file # generic patch prioritizion. Permitted values are project,patch,file,function,hunk
 
 
-    projectList : git   # repositories to mine and infer generic patches. Permitted values ALL, or comma seperated repository name located in datasets.csv
+    projectList : libtiff,cmake,redis,gzip,libarchive,cairo,vlc,curl,tcl   # repositories to mine and infer generic patches. Permitted values ALL, or comma seperated repository name located in datasets.csv
 
