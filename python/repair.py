@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, AnyStr
 from common.commons import shellGitCheckout, get_prioritization, load_zipped_pickle, parallelRunMerge
+from common.preprocessing import getTokensForPatterns
 
 ROOT_PATH = Path(os.environ["ROOT_DIR"])
 DATA_PATH = Path(os.environ["DATA_PATH"])
@@ -28,19 +29,17 @@ class Validator:
         self.failed = 0
         self.outcomes = {t: -1 for t in self.tests}
 
+        print(f"Compiling patch: {patch}")
         output, e = shellGitCheckout(self.compile_script)
-        print(output)
+        print(f"Compilation output: {output}")
+
         if e or not output:
-            print(f"\nCompilation failed for patch {patch.name}")
+            logging.warning(f"\nCompilation failed for patch {patch.name}")
             return False
 
-        print(f"\nPatch {patch.name} passed compilation")
+        print(f"\nPatch {patch.name} compiled")
 
-        for test_name, outcome, e in iter(self.__iter__()):
-            if e or not outcome:
-                print(f"\nTest {test_name} failed with return code {outcome} " + (str(e) if e else ''))
-            else:
-                print(f"\nTest {test_name} passed")
+        _ = [r for r in iter(self.__iter__())]
 
         if self.failed > 0:
             print(f"\nPatch {patch.name} failed {self.failed} tests.")
@@ -56,14 +55,17 @@ class Validator:
             raise StopIteration
 
         test_name = self.tests[self.cur]
+        print(f"Testing {test_name}")
         output, e = shellGitCheckout(self.script.replace("TEST_NAME", test_name))
-        print(output)
+
         if e or not output:
-            self.outcomes[test_name] = 1
-            self.passed += 1
-        else:
+            logging.warning(f"\nTest {test_name} failed with return {e}")
             self.outcomes[test_name] = 0
             self.failed += 1
+        else:
+            print(f"Test {test_name} passed.")
+            self.outcomes[test_name] = 1
+            self.passed += 1
 
         self.cur += 1
 
@@ -74,6 +76,11 @@ class Validator:
             return True
 
         return False
+
+    def success_rate(self):
+        if self.total != 0:
+            return round(self.passed / self.total, 3)
+        return 0
 
 
 @dataclass
@@ -96,28 +103,41 @@ class CocciExecutor:
             with self.sp_file.open(mode='w') as cf:
                 cf.write(self.pattern)
 
-        spatch_cmd = f"{COCCI_PATH} --sp-file {self.sp_file} {self.target} --patch {self.spatch_file}"
+        if not self.target_has_pattern():
+            return False
+
+        spatch_cmd = f"{COCCI_PATH} --sp-file {self.sp_file} {self.target} > {self.spatch_file}"
         # spatch_cmd += f" > {self.spatch_file}"
         output, e = shellGitCheckout(spatch_cmd)
 
-        if e is not None:
-            logging.warning(e)
-            return None
+        if not self.spatch_file.exists():
+            return False
 
-        if not self.spatch_file.exists() or self.spatch_file.stat().st_size == 0:
+        if self.spatch_file.stat().st_size == 0:
             self.spatch_file.unlink()
-            return None
+            return False
 
-        return output
+        return True
 
     def run_gnu_patch(self):
         output, e = shellGitCheckout(f"patch {self.target} {self.spatch_file} -o {self.patch}")
 
-        if e is not None:
-            logging.warning(e)
-            return None
+        if not self.patch.exists():
+            return False
 
-        return output
+        return True
+
+    def target_has_pattern(self):
+        with self.target.open(mode='r') as t:
+            lines = t.read()
+        target_tokens = getTokensForPatterns(lines)
+        pattern_tokens = getTokensForPatterns(self.pattern)
+        intersected_tokens = set(target_tokens).intersection(set(pattern_tokens))
+
+        if len(intersected_tokens) > 0:
+            return True
+
+        return False
 
 
 class CocciPatches:
@@ -134,16 +154,19 @@ class CocciPatches:
             return self.patches
 
         self.init_dirs()
-        self.load_all()
+        self.load()
+
+        print(f"Generating patches for {self.src_file}")
 
         cmd_list = [CocciExecutor(target=self.src_file, pattern=pattern,
                                   sp_file=self.data_path / Path(file),
-                                  spatch_file=self.patterns_dir / (self.src_file.stem + file.split('.')[0] + '.txt'),
-                                  patch=self.patches_dir / (self.src_file.stem + file.split('.')[0] + '.c')) for file, pattern
+                                  spatch_file=self.patterns_dir / f"{self.src_file.stem}_{file}.txt",
+                                  patch=self.patches_dir / f"{self.src_file.stem}_{file}.c") for file, pattern
                     in self.patterns.items()]
 
         patches = parallelRunMerge(cmd_list)
         self.patches = list(filter(None, patches))
+        print(f"Generated {len(self.patches)} patches")
 
         return self.patches
 
@@ -193,7 +216,7 @@ class PatchGenerator:
         self.backup_source.unlink()
 
     def apply(self, patch: Path):
-        print(f"Applying patch {patch.name}")
+        logging.info(f"Applying patch {patch.name}")
 
         with self.source_file.open(mode="w") as sf, patch.open(mode="r") as p:
             sf.write(p.read())
@@ -207,16 +230,22 @@ class ProgramRepair:
 
     def __call__(self, *args, **kwargs):
         self.generator.backup()
+        success_rate_patches = {}
 
         for patch in self.generator():
             if patch is None:
                 continue
             self.generator.apply(patch)
+            patch_passes = self.validator(patch)
+            success_rate_patches[patch.name] = (self.validator.success_rate(), self.validator.outcomes)
 
-            if self.validator(patch):
+            if patch_passes:
                 self.repair(patch)
-                print(f"\nProgram repaired with patch {patch}")
+                logging.info(f"\nProgram repaired with patch {patch}")
                 break
+
+        if success_rate_patches:
+            print(success_rate_patches)
 
         self.generator.restore()
 
