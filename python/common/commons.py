@@ -285,6 +285,8 @@ def shellGitCheckout(cmd,timeout =600,enc='utf-8'):
     with Popen(cmd, stdout=PIPE, stderr=PIPE, shell=True,encoding=enc) as p:
         try:
             output, errors = p.communicate(timeout=timeout)
+            if not errors and p.returncode and p.returncode != 0:
+                errors = f"code {p.returncode}"
             # print(output)
             logging.debug(cmd + '\t' +output)
             # logging.info(errors)

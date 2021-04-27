@@ -227,7 +227,7 @@ class ProgramRepair:
         self.generator = generator
         self.validator = validator
         self.repair_dir = generator.working_dir / 'repair'
-        self.limit = 5
+        self.limit = 20
 
     def __call__(self, *args, **kwargs):
         self.generator.backup()
@@ -258,7 +258,7 @@ class ProgramRepair:
 
     def repair(self, patch: Path):
         self.repair_dir.mkdir()
-        repair_file = self.repair_dir / patch.name
+        repair_file = self.repair_dir / self.generator.source_file.name
 
         with repair_file.open(mode="w") as rf, patch.open(mode='r') as p:
             rf.write(p.read())
