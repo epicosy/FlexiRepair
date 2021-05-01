@@ -82,7 +82,12 @@ RUN conda env create -f flexi/environment.yml
 
 #RUN curl -LO http://www.comp.nus.edu.sg/~release/codeflaws/codeflaws.tar.gz
 #RUN tar xf codeflaws.tar.gz
+WORKDIR /data
+RUN git clone https://github.com/epicosy/SecureThemAll.git && pip install -r SecureThemAll/requirements.txt
+
+WORKDIR /data/SecureThemAll/benchmark
+RUN git clone https://github.com/epicosy/cb-repair.git && ./cb-repair/init.sh
+
 WORKDIR /data/flexi/
 RUN git pull && mvn clean install
-
 
