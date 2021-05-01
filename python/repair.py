@@ -16,6 +16,27 @@ ALL_DATASET = ROOT_PATH / 'data' / 'allCocciPatterns.pickle'
 COCCI_PATH = Path(os.environ["coccinelle"]) / 'spatch'
 PRIORITIZATION = get_prioritization()
 
+c_code_keywords = {'auto', 'else', 'long', 'switch', 'break', 'enum', 'register', 'typedef', 'case', 'extern', 'return',
+                   'union', 'char', 'float', 'short', 'unsigned', 'const', 'for', 'signed', 'void', 'continue', 'goto',
+                   'sizeof', 'volatile', 'default', 'if', 'static', 'while', 'do', 'int', 'struct', 'double'}
+
+
+def count_keywords(tokens_set: set):
+    """
+        count the number of c code keywords in a list of tokens
+
+        Parameters
+        ----------
+        tokens_set: Set[AnyStr]
+            The file location of the spreadsheet
+
+        Returns
+        -------
+        count: int
+            the count of strings used that are the header columns
+    """
+    return len(tokens_set.intersection(c_code_keywords))
+
 
 class Validator:
     def __init__(self, test_script: str, compile_script: str, tests: List[AnyStr]):
@@ -84,48 +105,49 @@ class Validator:
 
 
 @dataclass
+class Patch:
+    file: Path
+    size: int
+    similarity: float
+    keywords: int
+
+
+@dataclass
 class CocciExecutor:
     target: Path
     sp_file: Path
     pattern: str
-    patch: Path
+    patch_file: Path
     spatch_file: Path
 
     def __call__(self, *args, **kwargs):
-        if self.run_spatch():
-            if self.run_gnu_patch():
-                return self.patch
-        return None
-
-    def run_spatch(self):
         # check if cocci file exists, otherwise create tmp file with the pattern
         if not self.sp_file.exists():
             with self.sp_file.open(mode='w') as cf:
                 cf.write(self.pattern)
+        # if pattern matches with code in the target file, then the function returns the size in tokens of the pattern,
+        # the ratio of matching tokens, and the number of matching keywords
+        pattern_size, similarity, keywords = self.target_has_pattern()
 
-        if not self.target_has_pattern():
-            return False
+        if similarity:
+            spatch_cmd = f"{COCCI_PATH} --sp-file {self.sp_file} {self.target} > {self.spatch_file}"
+            output, e = shellGitCheckout(spatch_cmd)
 
-        spatch_cmd = f"{COCCI_PATH} --sp-file {self.sp_file} {self.target} > {self.spatch_file}"
-        # spatch_cmd += f" > {self.spatch_file}"
-        output, e = shellGitCheckout(spatch_cmd)
+            if not self.spatch_file.exists():
+                return None
 
-        if not self.spatch_file.exists():
-            return False
+            if self.spatch_file.stat().st_size == 0:
+                self.spatch_file.unlink()
+                return None
 
-        if self.spatch_file.stat().st_size == 0:
-            self.spatch_file.unlink()
-            return False
+            output, e = shellGitCheckout(f"patch {self.target} {self.spatch_file} -o {self.patch_file}")
 
-        return True
+            if not self.patch_file.exists():
+                return None
 
-    def run_gnu_patch(self):
-        output, e = shellGitCheckout(f"patch {self.target} {self.spatch_file} -o {self.patch}")
+            return Patch(file=self.patch_file, size=pattern_size, similarity=similarity, keywords=keywords)
 
-        if not self.patch.exists():
-            return False
-
-        return True
+        return None
 
     def target_has_pattern(self):
         with self.target.open(mode='r') as t:
@@ -135,9 +157,9 @@ class CocciExecutor:
         intersected_tokens = set(target_tokens).intersection(set(pattern_tokens))
 
         if len(intersected_tokens) > 0:
-            return True
+            return len(pattern_tokens), len(intersected_tokens) / len(pattern_tokens), count_keywords(pattern_tokens)
 
-        return False
+        return None, None, None
 
 
 class CocciPatches:
@@ -161,12 +183,14 @@ class CocciPatches:
         cmd_list = [CocciExecutor(target=self.src_file, pattern=pattern,
                                   sp_file=self.data_path / Path(file),
                                   spatch_file=self.patterns_dir / f"{self.src_file.stem}_{file}.txt",
-                                  patch=self.patches_dir / f"{self.src_file.stem}_{file}.c") for file, pattern
+                                  patch_file=self.patches_dir / f"{self.src_file.stem}_{file}.c") for file, pattern
                     in self.patterns.items()]
 
         patches = parallelRunMerge(cmd_list)
         self.patches = list(filter(None, patches))
         print(f"Generated {len(self.patches)} patches")
+        # sort patches by similarity and size
+        self.patches.sort(key=lambda p: p.similarity * p.size * p.keywords)
 
         return self.patches
 
@@ -215,10 +239,10 @@ class PatchGenerator:
 
         self.backup_source.unlink()
 
-    def apply(self, patch: Path):
-        logging.info(f"Applying patch {patch.name}")
+    def apply(self, patch_file: Path):
+        logging.info(f"Applying patch {patch_file.name}")
 
-        with self.source_file.open(mode="w") as sf, patch.open(mode="r") as p:
+        with self.source_file.open(mode="w") as sf, patch_file.open(mode="r") as p:
             sf.write(p.read())
 
 
@@ -238,19 +262,19 @@ class ProgramRepair:
                 continue
             if idx + 1 == self.limit:
                 break
-            self.generator.apply(patch)
-            patch_passes = self.validator(patch)
-            success_rate_patches[patch.name] = (self.validator.success_rate(), self.validator.outcomes)
+            self.generator.apply(patch.file)
+            patch_passes = self.validator(patch.file)
+            success_rate_patches[patch.file.name] = (self.validator.success_rate(), self.validator.outcomes)
 
             if patch_passes:
-                self.repair(patch)
-                logging.info(f"\nProgram repaired with patch {patch}")
+                self.repair(patch.file)
+                logging.info(f"\nProgram repaired with patch {patch.file}")
                 break
 
         if success_rate_patches:
             print("Repair Summary")
-            for patch, outcomes in success_rate_patches.items():
-                print(patch, outcomes[0])
+            for patch_name, outcomes in success_rate_patches.items():
+                print(patch_name, outcomes[0])
                 for tn, v in outcomes[1].items():
                     print(f"\t{tn} {v}")
 
