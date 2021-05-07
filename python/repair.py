@@ -186,7 +186,7 @@ class CocciPatches:
                                   patch_file=self.patches_dir / f"{self.src_file.stem}_{file}.c") for file, pattern
                     in self.patterns.items()]
 
-        patches = parallelRunMerge(cmd_list)
+        patches = parallelRunMerge(cmd_list, max_workers=2)
         self.patches = list(filter(None, patches))
         print(f"Generated {len(self.patches)} patches")
         # sort patches by similarity and size
